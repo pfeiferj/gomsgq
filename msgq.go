@@ -4,25 +4,40 @@ import (
 	"errors"
 	"math/rand/v2"
 	"os"
-	"syscall"
 	"unsafe"
 
 	"sync/atomic"
 
 	"github.com/edsrzf/mmap-go"
-	"golang.org/x/sys/unix"
 )
 
 var OPENPILOT_PREFIX = os.Getenv("OPENPILOT_PREFIX")
-const PATH_PREFIX = "/tmp/"
+const PATH_PREFIX = "/dev/shm/"
 const NUM_READERS = 15
 const HEADER_SIZE = (3 * 8 + 3 * NUM_READERS * 8)
 
-type MsgqPublisher struct {}
+type MsgqPublisher struct {
+  Msgq Msgq
+  Uid uint64
+  Id uint64
+}
+
 type MsgqSubscriber struct {
   Msgq Msgq
   Uid uint64
   Id uint64
+}
+
+func (p *MsgqPublisher) Init(msgq Msgq) {
+  p.Msgq = msgq
+  p.Uid = generateUid()
+
+	*p.Msgq.Header.NumReaders = 0
+
+	for i := 0; i < NUM_READERS; i++ {
+		p.Msgq.Header.ReadValids[i] = 0
+		p.Msgq.Header.ReadUids[i] = 0
+  }
 }
 
 func generateUid() uint64 {
@@ -44,8 +59,7 @@ func (s *MsgqSubscriber) Init(msgq Msgq) {
         old_uid := s.Msgq.Header.ReadUids[i]
         s.Msgq.Header.ReadUids[i] = 0
 
-        // TODO: probably need to support tkill
-        unix.Kill(int(old_uid & 0xFFFFFFFF), syscall.SIGUSR2)
+        ThreadSignal(uint32(old_uid & 0xFFFFFFFF))
       }
       continue
     }
@@ -140,4 +154,8 @@ func (m *Msgq) Init(path string, size int64) error {
   m.Header.Init(mem)
 
   return nil
+}
+
+func (m *Msgq) WaitForSubscriber() {
+	for *m.Header.NumReaders == 0 {}
 }
