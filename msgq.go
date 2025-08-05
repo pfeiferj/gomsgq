@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"unsafe"
+	"fmt"
 
 	"sync/atomic"
 
@@ -14,8 +15,7 @@ import (
 var OPENPILOT_PREFIX = os.Getenv("OPENPILOT_PREFIX")
 const PATH_PREFIX = "/dev/shm/"
 const NUM_READERS = 15
-const HEADER_SIZE = (3 * 8 + 3 * NUM_READERS * 8)
-
+var HEADER_SIZE = (3 * 8 + 3 * NUM_READERS * 8) + align(3 * 8 + 3 * NUM_READERS * 8)
 type MsgqPublisher struct {
   Msgq Msgq
   Uid uint64
@@ -28,16 +28,90 @@ type MsgqSubscriber struct {
   Id uint64
 }
 
+func align(length int64) int64 {
+	remainder := length % 8
+	if remainder == 0 {
+		return 0
+	}
+	return 8 - remainder
+}
+
 func (p *MsgqPublisher) Init(msgq Msgq) {
   p.Msgq = msgq
   p.Uid = generateUid()
 
 	*p.Msgq.Header.NumReaders = 0
+	*p.Msgq.Header.WriteUid = p.Uid
+	*p.Msgq.Header.WritePointer = 0
 
-	for i := 0; i < NUM_READERS; i++ {
+	for i := range NUM_READERS {
 		p.Msgq.Header.ReadValids[i] = 0
 		p.Msgq.Header.ReadUids[i] = 0
   }
+}
+
+func (p *MsgqPublisher) Send(data []byte) {
+	if p.Uid != *p.Msgq.Header.WriteUid {
+		fmt.Printf("We are not the active publisher, panic")
+		panic(-1)
+	}
+	totalSize := int64(len(data) + 8) + align(int64(len(data)))
+	if totalSize * 3 >= p.Msgq.Size {
+		fmt.Printf("Queue too small, panic")
+		panic(-1)
+	}
+	numReaders := *p.Msgq.Header.NumReaders
+	writePointer := *p.Msgq.Header.WritePointer
+	writeCycles := writePointer >> 32
+	writePointer &= 0xFFFFFFFF
+	remainingSpace := p.Msgq.Size - int64(writePointer) - totalSize - 8
+
+	// Invalidate all readers that are beyond the write pointer
+	if remainingSpace <= 0 {
+		// write -1 size tag indicating wraparound
+		*(*int64)(unsafe.Pointer(&p.Msgq.Data[writePointer])) = int64(-1)
+		for i := range numReaders {
+			readPointer := p.Msgq.Header.ReadPointers[i]
+			readCycles := readPointer >> 32
+			readPointer &= 0xFFFFFFFF
+			if readPointer > writePointer && readCycles != writeCycles {
+				p.Msgq.Header.ReadValids[i] = 0 //false
+			}
+		}
+		writePointer = 0
+		writeCycles += 1
+		*p.Msgq.Header.WritePointer = (writeCycles << 32) | writePointer
+	}
+
+  // Invalidate readers that are in the area that will be written
+	end := writePointer + uint64(totalSize)
+	for i := range numReaders {
+		readPointer := p.Msgq.Header.ReadPointers[i]
+		readCycles := readPointer >> 32
+		readPointer &= 0xFFFFFFFF
+
+		if readPointer >= writePointer && readPointer < end && readCycles != writeCycles {
+			p.Msgq.Header.ReadValids[i] = 0 //false
+		}
+	}
+	
+  // Write size tag
+	*(*int64) (unsafe.Pointer(&p.Msgq.Data[writePointer])) = int64(len(data))
+
+  // Copy data
+	for i, b := range data {
+		p.Msgq.Data[int(writePointer) + 8 + i] = b
+	}
+
+  // Update write pointer
+	writePointer += uint64(totalSize)
+	*p.Msgq.Header.WritePointer = (writeCycles << 32) | (writePointer & 0xFFFFFFFF)
+
+  // Notify readers
+	for i := range numReaders {
+		rUid := p.Msgq.Header.ReadUids[i]
+		ThreadSignal(uint32(rUid))
+	}
 }
 
 func generateUid() uint64 {
@@ -84,6 +158,7 @@ type Msgq struct {
   Path string
   File *os.File
   Mem mmap.MMap
+	Data []uint8
   Header Header
 }
 
@@ -137,7 +212,7 @@ func (m *Msgq) Init(path string, size int64) error {
   if err != nil {
     return err
   }
-  err = f.Truncate(size)
+  err = f.Truncate(size + int64(HEADER_SIZE))
   if err != nil {
     return err
   }
@@ -152,6 +227,8 @@ func (m *Msgq) Init(path string, size int64) error {
   m.Mem = mem
   m.Header = Header{}
   m.Header.Init(mem)
+  data := unsafe.Slice((*byte)(unsafe.Pointer(&mem[HEADER_SIZE])), size)
+	m.Data = data
 
   return nil
 }
