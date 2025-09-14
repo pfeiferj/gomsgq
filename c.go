@@ -1,4 +1,4 @@
-package main
+package gomsgq
 
 // #include <stdint.h>
 // #include <signal.h>
