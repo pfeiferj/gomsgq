@@ -1,4 +1,4 @@
-module pfeifer.dev/gomsgq
+module github.com/pfeiferj/gomsgq
 
 go 1.23.0
 
