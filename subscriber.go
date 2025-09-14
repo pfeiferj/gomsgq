@@ -93,7 +93,7 @@ func (s *MsgqSubscriber) Read() []byte {
 			panic("Invalid Msgq message size")
 		}
 
-		nextReadPointer := readPointer + 8 + uint64(size)
+		nextReadPointer := readPointer + 8 + uint64(size) + uint64(align(size))
 		if s.Conflate {
 			writePointer := *s.Msgq.Header.WritePointer
 			writePointer &= 0xFFFFFFFF
