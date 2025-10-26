@@ -3,7 +3,7 @@ package gomsgq
 // #include <stdint.h>
 // #include <signal.h>
 //
-// static void thread_signal(uint tid) {
+// static void thread_signal(unsigned int tid) {
 //   #ifndef SYS_tkill
 //     // TODO: this won't work for multithreaded programs
 //     kill(tid, SIGUSR2);
