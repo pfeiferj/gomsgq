@@ -50,6 +50,7 @@ func (s *MsgqSubscriber) Init(msgq Msgq) {
 }
 
 func (s *MsgqSubscriber) Reset() {
+	s.Msgq.Mem.Flush()
   s.Msgq.Header.ReadValids[s.Id] = 1
   s.Msgq.Header.ReadPointers[s.Id] = *s.Msgq.Header.WritePointer
 }
