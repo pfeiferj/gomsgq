@@ -52,7 +52,6 @@ func (s *MsgqSubscriber) Init(msgq Msgq) {
 func (s *MsgqSubscriber) Reset() {
   s.Msgq.Header.ReadValids[s.Id] = 1
   s.Msgq.Header.ReadPointers[s.Id] = *s.Msgq.Header.WritePointer
-	s.Msgq.Mem.Flush()
 }
 
 func (s *MsgqSubscriber) Ready() bool {
@@ -86,11 +85,7 @@ func (s *MsgqSubscriber) Read() []byte {
 
 		if size == -1 {
 			readCycles++
-			s.Msgq.Header.ReadPointers[s.Id] = (readCycles << 32) | readPointer
-			err := s.Msgq.Mem.Flush()
-			if err != nil {
-				panic("Msgq Flush Error")
-			}
+			s.Msgq.Header.ReadPointers[s.Id] = (readCycles << 32)
 			continue
 		}
 
@@ -104,10 +99,6 @@ func (s *MsgqSubscriber) Read() []byte {
 			writePointer &= 0xFFFFFFFF
 			if nextReadPointer != writePointer {
 				s.Msgq.Header.ReadPointers[s.Id] = (readCycles << 32) | nextReadPointer
-				err := s.Msgq.Mem.Flush()
-				if err != nil {
-					panic("Msgq Flush Error")
-				}
 				continue
 			}
 		}
@@ -126,10 +117,6 @@ func (s *MsgqSubscriber) Read() []byte {
 		}
 		
 		s.Msgq.Header.ReadPointers[s.Id] = (readCycles << 32) | nextReadPointer
-		err = s.Msgq.Mem.Flush()
-		if err != nil {
-			panic("Msgq Flush Error")
-		}
 
 		if s.Msgq.Header.ReadValids[s.Id] == 0 {
 			s.Reset()
