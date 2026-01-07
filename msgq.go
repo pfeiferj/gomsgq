@@ -52,7 +52,7 @@ func (m *Msgq) Init(path string, size int64) error {
   m.Path = path
   m.Size = size
 
-	var hasMsgqPrefix := USE_MSGQ_PREFIX == "true"
+	hasMsgqPrefix := USE_MSGQ_PREFIX == "true"
 
 	if USE_MSGQ_PREFIX == "" {
 		entries, err := os.ReadDir(PATH_PREFIX)
