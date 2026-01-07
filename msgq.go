@@ -9,7 +9,9 @@ import (
 )
 
 var OPENPILOT_PREFIX = os.Getenv("OPENPILOT_PREFIX")
+var USE_MSGQ_PREFIX = os.Getenv("USE_MSGQ_PREFIX")
 const PATH_PREFIX = "/dev/shm/"
+const MSGQ_PREFIX = "msgq_"
 const NUM_READERS = 15
 var HEADER_SIZE = (3 * 8 + 3 * NUM_READERS * 8) + align(3 * 8 + 3 * NUM_READERS * 8)
 
@@ -49,9 +51,28 @@ func (m *Msgq) Init(path string, size int64) error {
   m.Path = path
   m.Size = size
 
+	var hasMsgqPrefix := USE_MSGQ_PREFIX == "true"
+
+	if USE_MSGQ_PREFIX == "" {
+		entries, err := os.ReadDir(PATH_PREFIX)
+		if err != nil {
+			panic("Could not read /dev/shm")
+		}
+
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), MSGQ_PREFIX) {
+				hasMsgqPrefix = true
+				break
+			}
+		}
+	}
+
   fullPath := PATH_PREFIX 
+	if hasMsgqPrefix {
+		fullPath = fullPath + MSGQ_PREFIX
+	}
   if OPENPILOT_PREFIX != "" {
-    fullPath = fullPath + OPENPILOT_PREFIX
+    fullPath = fullPath + OPENPILOT_PREFIX + "/"
   }
   fullPath = fullPath + path
   f, err := os.OpenFile(fullPath, os.O_RDWR | os.O_CREATE, 0664)
