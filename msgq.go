@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"unsafe"
+	"strings"
 
 	"github.com/edsrzf/mmap-go"
 )
