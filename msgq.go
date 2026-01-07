@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"unsafe"
-	"strings"
 
 	"github.com/edsrzf/mmap-go"
 )
@@ -61,7 +60,7 @@ func (m *Msgq) Init(path string, size int64) error {
 		}
 
 		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), MSGQ_PREFIX) {
+			if len(e.Name()) > len(MSGQ_PREFIX) && e.Name()[0:len(MSGQ_PREFIX)] == MSGQ_PREFIX {
 				hasMsgqPrefix = true
 				break
 			}
