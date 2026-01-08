@@ -11,6 +11,8 @@ import (
 var OPENPILOT_PREFIX = os.Getenv("OPENPILOT_PREFIX")
 var USE_MSGQ_PREFIX = os.Getenv("USE_MSGQ_PREFIX")
 const PATH_PREFIX = "/dev/shm/"
+const ALT_PATH_PREFIX = "/tmp/"
+const MSGQ_PREFIXED_TEST_NAME = "msgq_logMessage"
 const MSGQ_PREFIX = "msgq_"
 const NUM_READERS = 15
 var HEADER_SIZE = (3 * 8 + 3 * NUM_READERS * 8) + align(3 * 8 + 3 * NUM_READERS * 8)
@@ -22,6 +24,24 @@ type Msgq struct {
   Mem mmap.MMap
 	Data []uint8
   Header Header
+}
+
+func pathPrefix() string {
+	if _, err := os.Stat(PATH_PREFIX); err == nil {
+		return PATH_PREFIX
+	}
+	return ALT_PATH_PREFIX
+}
+
+func IsPrefixedMsgq() bool {
+	hasMsgqPrefix := USE_MSGQ_PREFIX == "true"
+
+	if USE_MSGQ_PREFIX == "" {
+		if _, err := os.Stat(pathPrefix() + MSGQ_PREFIXED_TEST_NAME); err == nil {
+			hasMsgqPrefix = true
+		}
+	}
+	return hasMsgqPrefix
 }
 
 func align(length int64) int64 {
@@ -51,24 +71,9 @@ func (m *Msgq) Init(path string, size int64) error {
   m.Path = path
   m.Size = size
 
-	hasMsgqPrefix := USE_MSGQ_PREFIX == "true"
+	fullPath := pathPrefix()
 
-	if USE_MSGQ_PREFIX == "" {
-		entries, err := os.ReadDir(PATH_PREFIX)
-		if err != nil {
-			panic("Could not read /dev/shm")
-		}
-
-		for _, e := range entries {
-			if len(e.Name()) > len(MSGQ_PREFIX) && e.Name()[0:len(MSGQ_PREFIX)] == MSGQ_PREFIX {
-				hasMsgqPrefix = true
-				break
-			}
-		}
-	}
-
-  fullPath := PATH_PREFIX 
-	if hasMsgqPrefix {
+	if IsPrefixedMsgq() {
 		fullPath = fullPath + MSGQ_PREFIX
 	}
   if OPENPILOT_PREFIX != "" {

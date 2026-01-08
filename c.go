@@ -4,8 +4,11 @@ package gomsgq
 // #include <signal.h>
 //
 // static void thread_signal(unsigned int tid) {
-//   #ifndef SYS_tkill
-//     // TODO: this won't work for multithreaded programs
+//   #ifdef __APPLE__
+//     // macOS doesn't have tkill, rely on polling instead
+//     (void)tid;
+//   #elif !defined(SYS_tkill)
+//     // fallback for systems without tkill
 //     kill(tid, SIGUSR2);
 //   #else
 //     syscall(SYS_tkill, tid, SIGUSR2);
