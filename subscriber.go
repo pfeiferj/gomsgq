@@ -62,6 +62,26 @@ func (s *MsgqSubscriber) Reset() {
 	}
 }
 
+// convert a (cycles << 32 | offset) pointer to a position that increases
+// monotonically across buffer wraparounds
+func (s *MsgqSubscriber) linear(pointer uint64) uint64 {
+	return (pointer >> 32) * uint64(s.Msgq.Size) + (pointer & 0xFFFFFFFF)
+}
+
+// a shadow reader has no slot so the publisher can't invalidate it when lapping
+// it, instead check that the write head hasn't wrapped back onto the region we
+// are reading. Send() keeps messages under a third of the buffer and dirties
+// memory up to one message past WritePointer, hence the Size/3 margin. the
+// writer only moves forward, so passing after a read also validates the read
+func (s *MsgqSubscriber) shadowValid(readLinear uint64) bool {
+	writeLinear := s.linear(*s.Msgq.Header.WritePointer)
+	if writeLinear < readLinear {
+		// the publisher restarted and reset its write pointer
+		return false
+	}
+	return writeLinear+uint64(s.Msgq.Size)/3 <= readLinear+uint64(s.Msgq.Size)
+}
+
 func (s *MsgqSubscriber) Ready() bool {
 	if !s.Shadow {
 		for (s.Uid != s.Msgq.Header.ReadUids[s.Id]) {
@@ -80,37 +100,30 @@ func (s *MsgqSubscriber) Ready() bool {
 
 		return readPointer != writePointer
 	} else {
-		readPointer := s.shadowPointer
-		readPointer &= 0xFFFFFFFF
-
-		writePointer := *s.Msgq.Header.WritePointer
-		writePointer &= 0xFFFFFFFF
-		return readPointer != writePointer
+		return s.shadowPointer != *s.Msgq.Header.WritePointer
 	}
 }
 
 func (s *MsgqSubscriber) Read() []byte {
-	if !s.Ready() {
-		return nil
-	}
-
 	for {
+		// re-check every iteration, a Reset inside this loop moves the read
+		// pointer to the write head where there is no message yet
+		if !s.Ready() {
+			return nil
+		}
+
 		var readPointer uint64
 		if s.Shadow {
 			readPointer = s.shadowPointer
 		} else {
 			readPointer = s.Msgq.Header.ReadPointers[s.Id]
 		}
+		readLinear := s.linear(readPointer)
 		readCycles := readPointer >> 32
 		readPointer &= 0xFFFFFFFF
-		if s.Shadow {
-			writePointer := *s.Msgq.Header.WritePointer
-			writeCycles := writePointer >> 32
-			writePointer &= 0xFFFFFFFF
-			if readPointer > writePointer && readCycles != writeCycles {
-				s.Reset()
-				continue
-			}
+		if s.Shadow && !s.shadowValid(readLinear) {
+			s.Reset()
+			continue
 		}
 		size := *(*int64) (unsafe.Pointer(&s.Msgq.Data[readPointer]))
 
@@ -125,6 +138,11 @@ func (s *MsgqSubscriber) Read() []byte {
 		}
 
 		if size >= s.Msgq.Size || size <= 0 {
+			if s.Shadow && !s.shadowValid(readLinear) {
+				// the size field was overwritten while we read it
+				s.Reset()
+				continue
+			}
 			panic("Invalid Msgq message size")
 		}
 
@@ -154,8 +172,13 @@ func (s *MsgqSubscriber) Read() []byte {
 		if err != nil {
 			panic("Msgq Flush Error")
 		}
-		
+
 		if s.Shadow {
+			// discard torn results, mirrors the ReadValids re-check below
+			if !s.shadowValid(readLinear) {
+				s.Reset()
+				continue
+			}
 			s.shadowPointer = (readCycles << 32) | nextReadPointer
 		} else {
 			s.Msgq.Header.ReadPointers[s.Id] = (readCycles << 32) | nextReadPointer
