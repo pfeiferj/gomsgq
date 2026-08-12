@@ -26,6 +26,19 @@ type Msgq struct {
   Header Header
 }
 
+func (m *Msgq) WraparoundPosition() uint64 {
+	position := uint64(0)
+	for position + 8 < uint64(len(m.Data)) {
+		size := *(*int64) (unsafe.Pointer(&m.Data[position]))
+		if size == -1 {
+			break
+		}
+		position += 8 + uint64(size) + uint64(align(size))
+
+	}
+	return position
+}
+
 func pathPrefix() string {
 	if _, err := os.Stat(PATH_PREFIX); err == nil {
 		return PATH_PREFIX
