@@ -16,6 +16,7 @@ type MsgqSubscriber struct {
 	Conflate bool
 	shadowPointer uint64
 	previousShadowPointer uint64
+	shadowReset bool
 }
 
 func generateUid() uint64 {
@@ -56,19 +57,21 @@ func (s *MsgqSubscriber) Init(msgq Msgq) {
 
 func (s *MsgqSubscriber) ShadowValid(writePointer Pointer) bool {
 	readPointer := NewPointer(s.shadowPointer)
-	previousReadPointer := NewPointer(s.previousShadowPointer)
 
-	previousSize := *(*int64) (unsafe.Pointer(&s.Msgq.Data[previousReadPointer.Position]))
-	
-	if previousSize == -1 && readPointer.Position != 0 {
-		return false
-	}
-
-	if previousSize != -1 {
-		calculatedCurrentReadPointer := previousReadPointer.Next(previousSize)
+	if !s.shadowReset {
+		previousReadPointer := NewPointer(s.previousShadowPointer)
+		previousSize := *(*int64) (unsafe.Pointer(&s.Msgq.Data[previousReadPointer.Position]))
 		
-		if readPointer.Position != calculatedCurrentReadPointer.Position {
+		if previousSize == -1 && readPointer.Position != 0 {
 			return false
+		}
+
+		if previousSize != -1 {
+			calculatedCurrentReadPointer := previousReadPointer.Next(previousSize)
+			
+			if readPointer.Position != calculatedCurrentReadPointer.Position {
+				return false
+			}
 		}
 	}
 
@@ -93,6 +96,7 @@ func (s *MsgqSubscriber) Reset() {
 		s.Msgq.Header.ReadPointers[s.Id] = *s.Msgq.Header.WritePointer
 	} else {
 		s.shadowPointer = *s.Msgq.Header.WritePointer
+		s.shadowReset = true
 	}
 }
 
@@ -152,6 +156,7 @@ func (s *MsgqSubscriber) Read() []byte {
 			readPointer.Cycle()
 			if s.Shadow {
 				s.previousShadowPointer = s.shadowPointer
+				s.shadowReset = false
 				s.shadowPointer = readPointer.Marshal()
 			} else {
 				s.Msgq.Header.ReadPointers[s.Id] = readPointer.Marshal()
@@ -174,6 +179,7 @@ func (s *MsgqSubscriber) Read() []byte {
 			if nextReadPointer.Position != writePointer.Position {
 				if s.Shadow {
 					s.previousShadowPointer = s.shadowPointer
+					s.shadowReset = false
 					s.shadowPointer = nextReadPointer.Marshal()
 				} else {
 					s.Msgq.Header.ReadPointers[s.Id] = nextReadPointer.Marshal()
