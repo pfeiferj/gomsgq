@@ -33,51 +33,45 @@ func (p *MsgqPublisher) Send(data []byte) {
 		panic("Msgq size too small, panic")
 	}
 	numReaders := *p.Msgq.Header.NumReaders
-	writePointer := *p.Msgq.Header.WritePointer
-	writeCycles := writePointer >> 32
-	writePointer &= 0xFFFFFFFF
-	remainingSpace := p.Msgq.Size - int64(writePointer) - totalSize - 8
+	writePointer := NewPointer(*p.Msgq.Header.WritePointer)
+	remainingSpace := p.Msgq.Size - int64(writePointer.Position) - totalSize - 8
 
 	// Invalidate all readers that are beyond the write pointer
 	if remainingSpace <= 0 {
 		// write -1 size tag indicating wraparound
-		*(*int64)(unsafe.Pointer(&p.Msgq.Data[writePointer])) = int64(-1)
+		*(*int64)(unsafe.Pointer(&p.Msgq.Data[writePointer.Position])) = int64(-1)
 		for i := range numReaders {
-			readPointer := p.Msgq.Header.ReadPointers[i]
-			readCycles := readPointer >> 32
-			readPointer &= 0xFFFFFFFF
-			if readPointer > writePointer && readCycles != writeCycles {
+			readPointer := NewPointer(p.Msgq.Header.ReadPointers[i])
+			if readPointer.Position > writePointer.Position && readPointer.Cycles != writePointer.Cycles {
 				p.Msgq.Header.ReadValids[i] = 0 //false
 			}
 		}
-		writePointer = 0
-		writeCycles += 1
-		*p.Msgq.Header.WritePointer = (writeCycles << 32) | writePointer
+		writePointer.Position = 0
+		writePointer.Cycles += 1
+		*p.Msgq.Header.WritePointer = writePointer.Marshal()
 	}
 
   // Invalidate readers that are in the area that will be written
-	end := writePointer + uint64(totalSize)
+	end := writePointer.Position + uint64(totalSize)
 	for i := range numReaders {
-		readPointer := p.Msgq.Header.ReadPointers[i]
-		readCycles := readPointer >> 32
-		readPointer &= 0xFFFFFFFF
+		readPointer := NewPointer(p.Msgq.Header.ReadPointers[i])
 
-		if readPointer >= writePointer && readPointer < end && readCycles != writeCycles {
+		if readPointer.Position >= writePointer.Position && readPointer.Position < end && readPointer.Cycles != writePointer.Cycles {
 			p.Msgq.Header.ReadValids[i] = 0 //false
 		}
 	}
 	
   // Write size tag
-	*(*int64) (unsafe.Pointer(&p.Msgq.Data[writePointer])) = int64(len(data))
+	*(*int64) (unsafe.Pointer(&p.Msgq.Data[writePointer.Position])) = int64(len(data))
 
   // Copy data
 	for i, b := range data {
-		p.Msgq.Data[int(writePointer) + 8 + i] = b
+		p.Msgq.Data[int(writePointer.Position) + 8 + i] = b
 	}
 
   // Update write pointer
-	writePointer += uint64(totalSize)
-	*p.Msgq.Header.WritePointer = (writeCycles << 32) | (writePointer & 0xFFFFFFFF)
+	writePointer.Position += uint64(totalSize)
+	*p.Msgq.Header.WritePointer = writePointer.Marshal()
 
   // Notify readers
 	for i := range numReaders {

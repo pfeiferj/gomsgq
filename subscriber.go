@@ -15,6 +15,8 @@ type MsgqSubscriber struct {
   Id uint64
 	Conflate bool
 	shadowPointer uint64
+	previousShadowPointer uint64
+	shadowReset bool
 }
 
 func generateUid() uint64 {
@@ -53,12 +55,48 @@ func (s *MsgqSubscriber) Init(msgq Msgq) {
   s.Reset()
 }
 
+func (s *MsgqSubscriber) ShadowValid(writePointer Pointer) bool {
+	readPointer := NewPointer(s.shadowPointer)
+
+	if !s.shadowReset {
+		previousReadPointer := NewPointer(s.previousShadowPointer)
+		previousSize := *(*int64) (unsafe.Pointer(&s.Msgq.Data[previousReadPointer.Position]))
+		
+		if previousSize == -1 && readPointer.Position != 0 {
+			return false
+		}
+
+		if previousSize != -1 {
+			calculatedCurrentReadPointer := previousReadPointer.Next(previousSize)
+			
+			if readPointer.Position != calculatedCurrentReadPointer.Position {
+				return false
+			}
+		}
+	}
+
+	if readPointer.Cycles != writePointer.Cycles && readPointer.Position <= writePointer.Position {
+		return false
+	}
+
+	if readPointer.Cycles != writePointer.Cycles && readPointer.Position > s.Msgq.WraparoundPosition() {
+		return false
+	}
+
+	if readPointer.Cycles == writePointer.Cycles && readPointer.Position > writePointer.Position {
+		return false
+	}
+
+	return true
+}
+
 func (s *MsgqSubscriber) Reset() {
 	if !s.Shadow {
 		s.Msgq.Header.ReadValids[s.Id] = 1
 		s.Msgq.Header.ReadPointers[s.Id] = *s.Msgq.Header.WritePointer
 	} else {
 		s.shadowPointer = *s.Msgq.Header.WritePointer
+		s.shadowReset = true
 	}
 }
 
@@ -72,20 +110,24 @@ func (s *MsgqSubscriber) Ready() bool {
 			s.Reset()
 		}
 
-		readPointer := s.Msgq.Header.ReadPointers[s.Id]
-		readPointer &= 0xFFFFFFFF
+		readPointer := NewPointer(s.Msgq.Header.ReadPointers[s.Id])
 
-		writePointer := *s.Msgq.Header.WritePointer
-		writePointer &= 0xFFFFFFFF
+		writePointer := NewPointer(*s.Msgq.Header.WritePointer)
 
-		return readPointer != writePointer
+		return readPointer.Position != writePointer.Position
 	} else {
-		readPointer := s.shadowPointer
-		readPointer &= 0xFFFFFFFF
+		for {
+			readPointer := NewPointer(s.shadowPointer)
+			writePointer := NewPointer(*s.Msgq.Header.WritePointer)
 
-		writePointer := *s.Msgq.Header.WritePointer
-		writePointer &= 0xFFFFFFFF
-		return readPointer != writePointer
+			if !s.ShadowValid(writePointer) {
+				s.Reset()
+				continue
+			}
+
+			return readPointer.Position != writePointer.Position
+		}
+
 	}
 }
 
@@ -95,48 +137,52 @@ func (s *MsgqSubscriber) Read() []byte {
 	}
 
 	for {
-		var readPointer uint64
+		var readPointer Pointer
 		if s.Shadow {
-			readPointer = s.shadowPointer
+			readPointer = NewPointer(s.shadowPointer)
 		} else {
-			readPointer = s.Msgq.Header.ReadPointers[s.Id]
+			readPointer = NewPointer(s.Msgq.Header.ReadPointers[s.Id])
 		}
-		readCycles := readPointer >> 32
-		readPointer &= 0xFFFFFFFF
 		if s.Shadow {
-			writePointer := *s.Msgq.Header.WritePointer
-			writeCycles := writePointer >> 32
-			writePointer &= 0xFFFFFFFF
-			if readPointer > writePointer && readCycles != writeCycles {
+			writePointer := NewPointer(*s.Msgq.Header.WritePointer)
+			if !s.ShadowValid(writePointer) {
 				s.Reset()
 				continue
 			}
 		}
-		size := *(*int64) (unsafe.Pointer(&s.Msgq.Data[readPointer]))
+		size := *(*int64) (unsafe.Pointer(&s.Msgq.Data[readPointer.Position]))
 
 		if size == -1 {
-			readCycles++
+			readPointer.Cycle()
 			if s.Shadow {
-				s.shadowPointer = (readCycles << 32)
+				s.previousShadowPointer = s.shadowPointer
+				s.shadowReset = false
+				s.shadowPointer = readPointer.Marshal()
 			} else {
-				s.Msgq.Header.ReadPointers[s.Id] = (readCycles << 32)
+				s.Msgq.Header.ReadPointers[s.Id] = readPointer.Marshal()
 			}
 			continue
 		}
 
 		if size >= s.Msgq.Size || size <= 0 {
+			if s.Shadow || s.Conflate {
+				s.Reset()
+				continue
+			}
+
 			panic("Invalid Msgq message size")
 		}
 
-		nextReadPointer := readPointer + 8 + uint64(size) + uint64(align(size))
+		nextReadPointer := readPointer.Next(size)
 		if s.Conflate {
-			writePointer := *s.Msgq.Header.WritePointer
-			writePointer &= 0xFFFFFFFF
-			if nextReadPointer != writePointer {
+			writePointer := NewPointer(*s.Msgq.Header.WritePointer)
+			if nextReadPointer.Position != writePointer.Position {
 				if s.Shadow {
-					s.shadowPointer = (readCycles << 32) | nextReadPointer
+					s.previousShadowPointer = s.shadowPointer
+					s.shadowReset = false
+					s.shadowPointer = nextReadPointer.Marshal()
 				} else {
-					s.Msgq.Header.ReadPointers[s.Id] = (readCycles << 32) | nextReadPointer
+					s.Msgq.Header.ReadPointers[s.Id] = nextReadPointer.Marshal()
 				}
 				continue
 			}
@@ -148,7 +194,7 @@ func (s *MsgqSubscriber) Read() []byte {
 		}
 		result := make([]byte, size)
 		for i := range size {
-			result[i] = s.Msgq.Data[int64(readPointer) + 8 + i]
+			result[i] = s.Msgq.Data[int64(readPointer.Position) + 8 + i]
 		}
 		err = s.Msgq.Mem.Flush()
 		if err != nil {
@@ -156,9 +202,10 @@ func (s *MsgqSubscriber) Read() []byte {
 		}
 		
 		if s.Shadow {
-			s.shadowPointer = (readCycles << 32) | nextReadPointer
+			s.previousShadowPointer = s.shadowPointer
+			s.shadowPointer = nextReadPointer.Marshal()
 		} else {
-			s.Msgq.Header.ReadPointers[s.Id] = (readCycles << 32) | nextReadPointer
+			s.Msgq.Header.ReadPointers[s.Id] = nextReadPointer.Marshal()
 		}
 
 		if !s.Shadow && s.Msgq.Header.ReadValids[s.Id] == 0 {
