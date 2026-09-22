@@ -30,10 +30,10 @@ func (s *MsgqSubscriber) Init(msgq Msgq) {
 		for {
 			curNumReaders := *s.Msgq.Header.NumReaders
 			newNumReaders := curNumReaders + 1
-			if (newNumReaders > NUM_READERS) {
+			if (newNumReaders > uint64(msgq.MaxReaders)) {
 				*s.Msgq.Header.NumReaders = 0
 				
-				for i := range NUM_READERS {
+				for i := range msgq.MaxReaders {
 					s.Msgq.Header.ReadValids[i] = 0
 
 					old_uid := s.Msgq.Header.ReadUids[i]

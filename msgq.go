@@ -14,13 +14,17 @@ const PATH_PREFIX = "/dev/shm/"
 const ALT_PATH_PREFIX = "/tmp/"
 const MSGQ_PREFIXED_TEST_NAME = "msgq_logMessage"
 const MSGQ_PREFIX = "msgq_"
-const NUM_READERS = 15
-var HEADER_SIZE = (3 * 8 + 3 * NUM_READERS * 8) + align(3 * 8 + 3 * NUM_READERS * 8)
+const DEFAULT_MAX_READERS = 15
+
+func (m *Msgq) HeaderSize() int64 {
+	return (3 * 8 + 3 * m.MaxReaders * 8) + align(3 * 8 + 3 * m.MaxReaders * 8)
+}
 
 type Msgq struct {
   Size int64
   Path string
   File *os.File
+	MaxReaders int64
   Mem mmap.MMap
 	Data []uint8
   Header Header
@@ -77,12 +81,16 @@ func (m *Msgq) Close() (error, error) {
   return memErr, fileErr
 }
 
-func (m *Msgq) Init(path string, size int64) error {
+func (m *Msgq) Init(path string, size int64, maxReaders int64) error {
   if(size >= 0xFFFFFFFF) {
     return errors.New("buffer must be smaller than 2^32 bytes")
   }
   m.Path = path
   m.Size = size
+	m.MaxReaders = maxReaders
+	if m.MaxReaders <= 0 {
+		m.MaxReaders = DEFAULT_MAX_READERS
+	}
 
 	fullPath := pathPrefix()
 
@@ -97,7 +105,7 @@ func (m *Msgq) Init(path string, size int64) error {
   if err != nil {
     return err
   }
-  err = f.Truncate(size + int64(HEADER_SIZE))
+  err = f.Truncate(size + int64(m.HeaderSize()))
   if err != nil {
     return err
   }
@@ -111,8 +119,8 @@ func (m *Msgq) Init(path string, size int64) error {
   }
   m.Mem = mem
   m.Header = Header{}
-  m.Header.Init(mem)
-  data := unsafe.Slice((*byte)(unsafe.Pointer(&mem[HEADER_SIZE])), size)
+  m.Header.Init(mem, m.MaxReaders)
+  data := unsafe.Slice((*byte)(unsafe.Pointer(&mem[m.HeaderSize()])), size)
 	m.Data = data
 
   return nil
