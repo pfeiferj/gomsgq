@@ -18,7 +18,7 @@ func (p *MsgqPublisher) Init(msgq Msgq) {
 	*p.Msgq.Header.WriteUid = p.Uid
 	*p.Msgq.Header.WritePointer = 0
 
-	for i := range NUM_READERS {
+	for i := range msgq.MaxReaders {
 		p.Msgq.Header.ReadValids[i] = 0
 		p.Msgq.Header.ReadUids[i] = 0
   }
